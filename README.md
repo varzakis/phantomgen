@@ -28,7 +28,7 @@ The NEMA (National Electrical Manufacturers Association) IQ Body Phantom is a st
 
 ```bash
 # From source
-git clone https://github.com/yourname/phantomgen.git
+git clone https://github.com/varzakis/phantomgen.git
 cd phantomgen
 pip install -e .
 ```
