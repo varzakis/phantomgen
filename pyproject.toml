@@ -1,0 +1,16 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "phantomgen"
+version = "0.1.0"
+description = "Virtual nuclear medicine phantom generators (IEC/NEMA IQ, etc.)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [{ name = "Your Name" }]
+dependencies = ["numpy>=1.23"]
+
+[project.scripts]
+phantomgen = "phantomgen.core:cli"   # gives you a `phantomgen` command
