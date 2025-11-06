@@ -240,7 +240,6 @@ def create_nema(
     act_vol, ct_vol : np.ndarray
         Activity and CT μ-map volumes (same shape).
     """
-    import numpy as np
 
     supersample = _normalize_supersample(supersample)
     use_supersample = supersample != (1, 1, 1)
