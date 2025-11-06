@@ -183,7 +183,6 @@ def create_nema(
     act_vol, ct_vol : np.ndarray
         Activity and CT μ-map volumes (same shape).
     """
-    import numpy as np
 
     # --- defaults ---
     defaults = {
@@ -294,7 +293,7 @@ earl_nema_dict = {
         "fill_mu_value": 0.14,
         "lung_mu_value": 0.043
     },
-    "activity_concentration_background": 0.05,
+    "activity_concentration_background": 0.0,
     "include_lung_insert": False,
     "sphere_dict": {
         "ring_R": 57,
