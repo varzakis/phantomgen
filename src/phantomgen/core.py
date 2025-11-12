@@ -270,7 +270,7 @@ def create_nema(
             "spheres": {
                 "diametre_mm": [10,13,17,22,28,37],
                 "angle_loc":   [30,90,150,210,270,330],
-            "act_conc_MBq_ml": [0.00,0.00,0.4,0.4,0.4,0.4],
+                "act_conc_MBq_ml": [0.00,0.00,0.4,0.4,0.4,0.4],
             }
         }
     }
@@ -380,7 +380,7 @@ earl_nema_dict = {
         "fill_mu_value": 0.14,
         "lung_mu_value": 0.043
     },
-    "activity_concentration_background": 0.05,
+    "activity_concentration_background": 0.0,
     "include_lung_insert": False,
     "sphere_dict": {
         "ring_R": 57,
