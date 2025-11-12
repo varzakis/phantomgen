@@ -1,5 +1,48 @@
 import numpy as np
 
+
+def _normalize_supersample(factors):
+    """
+    Ensure supersampling factors are a length-3 tuple of positive integers.
+    """
+    if isinstance(factors, int):
+        normalized = (factors, factors, factors)
+    elif isinstance(factors, (tuple, list)):
+        if len(factors) != 3:
+            raise ValueError("Supersample sequence must have exactly three elements.")
+        normalized = tuple(int(f) for f in factors)
+    else:
+        raise TypeError("Supersample must be an int or a sequence of three ints.")
+
+    if any(f < 1 for f in normalized):
+        raise ValueError("Supersample factors must be >= 1.")
+
+    return normalized
+
+
+def _downsample_volume(volume, factors, reduce="mean"):
+    """
+    Downsample a 3D volume by integer factors along each axis.
+    """
+    if volume.ndim != 3:
+        raise ValueError("Expected a 3D volume to downsample.")
+
+    zf, yf, xf = factors
+    Z, Y, X = volume.shape
+    if (Z % zf) or (Y % yf) or (X % xf):
+        raise ValueError(
+            f"Volume shape {volume.shape} is not divisible by factors {factors}."
+        )
+
+    reshaped = volume.reshape(Z // zf, zf, Y // yf, yf, X // xf, xf)
+    if reduce == "mean":
+        reduced = reshaped.mean(axis=(1, 3, 5))
+    elif reduce == "sum":
+        reduced = reshaped.sum(axis=(1, 3, 5))
+    else:
+        raise ValueError("reduce must be either 'mean' or 'sum'.")
+    return reduced.astype(volume.dtype, copy=False)
+
 # ===============================================================
 # ===  HELPER: Generate centered world coordinates for a volume ===
 # ===============================================================
@@ -142,7 +185,9 @@ def add_sphere(volume, voxel_size_mm, radius_mm, center_mm=(0, 0, 0), value=1):
 def create_nema(
     matrix_size=(256, 256, 256),              # (Z,Y,X)
     voxel_size_mm=(2.0, 2.0, 2.0),
-    nema_dict=None
+    nema_dict=None,
+    center_offset_mm=None,
+    supersample=1,
 ):
     """
     Create a 3D numerical phantom matching the IEC/NEMA IQ body phantom geometry.
@@ -178,11 +223,36 @@ def create_nema(
             }
         }
 
+        The dictionary may also include:
+            "center_offset_mm": (cz, cy, cx)   # global shift in mm
+
+    center_offset_mm : tuple (cz, cy, cx) or None
+        Optional explicit global offset applied to every primitive (mm).
+        Overrides any value present in `nema_dict` when provided.
+    supersample : int or tuple(int, int, int)
+        Supersampling factor along (Z, Y, X). The phantom is generated on a higher
+        resolution grid and downsampled back to `matrix_size`. Activity values are
+        summed during downsampling to conserve total activity; attenuation values
+        are averaged.
+
     Returns
     -------
     act_vol, ct_vol : np.ndarray
         Activity and CT μ-map volumes (same shape).
     """
+
+    supersample = _normalize_supersample(supersample)
+    use_supersample = supersample != (1, 1, 1)
+
+    matrix_size = tuple(int(m) for m in matrix_size)
+    voxel_size_mm = tuple(float(v) for v in voxel_size_mm)
+
+    if use_supersample:
+        working_matrix = tuple(int(m * f) for m, f in zip(matrix_size, supersample))
+        working_voxel = tuple(float(v) / f for v, f in zip(voxel_size_mm, supersample))
+    else:
+        working_matrix = matrix_size
+        working_voxel = voxel_size_mm
 
     # --- defaults ---
     defaults = {
@@ -193,13 +263,14 @@ def create_nema(
         },
         "activity_concentration_background": 0.05,
         "include_lung_insert": True,
+        "center_offset_mm": (0.0, 0.0, 0.0),
         "sphere_dict": {
             "ring_R": 57,
             "ring_z": -37,
             "spheres": {
                 "diametre_mm": [10,13,17,22,28,37],
                 "angle_loc":   [30,90,150,210,270,330],
-                "act_conc_MBq_ml": [0.00,0.00,0.4,0.4,0.4,0.4],
+            "act_conc_MBq_ml": [0.00,0.00,0.4,0.4,0.4,0.4],
             }
         }
     }
@@ -219,6 +290,18 @@ def create_nema(
             return d
         nema_dict = deep_update(copy.deepcopy(nema_dict), defaults)
 
+    # --- global offset ---
+    default_offset = defaults.get("center_offset_mm", (0.0, 0.0, 0.0))
+    dict_offset = nema_dict.get("center_offset_mm", default_offset)
+    if center_offset_mm is None:
+        center_offset_mm = dict_offset
+
+    offset_z, offset_y, offset_x = map(float, center_offset_mm)
+
+    def with_offset(center):
+        cz, cy, cx = center
+        return (cz + offset_z, cy + offset_y, cx + offset_x)
+
     # --- unpack parameters ---
     act_conc_backgr = nema_dict["activity_concentration_background"]
     fill_mu_value = nema_dict["mu_values"]["fill_mu_value"]
@@ -236,16 +319,16 @@ def create_nema(
         print("❌ Volume smaller than NEMA phantom dimensions!")
         return
 
-    ctac_vol = np.zeros(matrix_size, np.float32)
-    act_vol = np.zeros(matrix_size, np.float32)
+    ctac_vol = np.zeros(working_matrix, np.float32)
+    act_vol = np.zeros(working_matrix, np.float32)
 
-    ml_per_vox = np.prod(voxel_size_mm) / 1000.0
+    ml_per_vox = np.prod(working_voxel) / 1000.0
     back_MBq_per_vox = act_conc_backgr * ml_per_vox
 
     # --- connecting box ---
-    add_box(ctac_vol,  voxel_size_mm, (220, 75, 150), (0, 72.5, 0), value=perspex_mu_value)
-    add_box(ctac_vol,  voxel_size_mm, (214, 72, 150), (0, 71, 0), value=fill_mu_value)
-    add_box(act_vol, voxel_size_mm, (214, 72, 150), (0, 71, 0), value=back_MBq_per_vox)
+    add_box(ctac_vol,  working_voxel, (220, 75, 150), with_offset((0, 72.5, 0)), value=perspex_mu_value)
+    add_box(ctac_vol,  working_voxel, (214, 72, 150), with_offset((0, 71, 0)), value=fill_mu_value)
+    add_box(act_vol, working_voxel, (214, 72, 150), with_offset((0, 71, 0)), value=back_MBq_per_vox)
 
     # --- tank structure ---
     tanks = [
@@ -261,13 +344,13 @@ def create_nema(
 
     for t in tanks:
         if t["mu"] == "perspex":
-            add_cylinder(ctac_vol, voxel_size_mm, t["r"], t["h"], t["deg"], t["c"], perspex_mu_value)
+            add_cylinder(ctac_vol, working_voxel, t["r"], t["h"], t["deg"], with_offset(t["c"]), perspex_mu_value)
         elif t["mu"] == "fill":
-            add_cylinder(ctac_vol, voxel_size_mm, t["r"], t["h"], t["deg"], t["c"], fill_mu_value)
-            add_cylinder(act_vol, voxel_size_mm, t["r"], t["h"], t["deg"], t["c"], back_MBq_per_vox)
+            add_cylinder(ctac_vol, working_voxel, t["r"], t["h"], t["deg"], with_offset(t["c"]), fill_mu_value)
+            add_cylinder(act_vol, working_voxel, t["r"], t["h"], t["deg"], with_offset(t["c"]), back_MBq_per_vox)
         else:
-            add_cylinder(ctac_vol, voxel_size_mm, t["r"], t["h"], t["deg"], t["c"], lung_mu_value)
-            add_cylinder(act_vol, voxel_size_mm, t["r"], t["h"], t["deg"], t["c"], 0)
+            add_cylinder(ctac_vol, working_voxel, t["r"], t["h"], t["deg"], with_offset(t["c"]), lung_mu_value)
+            add_cylinder(act_vol, working_voxel, t["r"], t["h"], t["deg"], with_offset(t["c"]), 0)
 
     # --- add spheres ---
     for d, a, c in zip(
@@ -280,9 +363,13 @@ def create_nema(
         ang = np.deg2rad(a)
         cy, cx = -ring_R * np.sin(ang), ring_R * np.cos(ang)
         fill_act = c * ml_per_vox
-        add_sphere(ctac_vol, voxel_size_mm, r_shell, (z_pos, cy, cx), value=perspex_mu_value)
-        add_sphere(ctac_vol, voxel_size_mm, r_interior, (z_pos, cy, cx), value=fill_mu_value)
-        add_sphere(act_vol, voxel_size_mm, r_interior, (z_pos, cy, cx), value=fill_act)
+        add_sphere(ctac_vol, working_voxel, r_shell, with_offset((z_pos, cy, cx)), value=perspex_mu_value)
+        add_sphere(ctac_vol, working_voxel, r_interior, with_offset((z_pos, cy, cx)), value=fill_mu_value)
+        add_sphere(act_vol, working_voxel, r_interior, with_offset((z_pos, cy, cx)), value=fill_act)
+
+    if use_supersample:
+        act_vol = _downsample_volume(act_vol, supersample, reduce="sum")
+        ctac_vol = _downsample_volume(ctac_vol, supersample, reduce="mean")
 
     return act_vol, ctac_vol
 
@@ -293,7 +380,7 @@ earl_nema_dict = {
         "fill_mu_value": 0.14,
         "lung_mu_value": 0.043
     },
-    "activity_concentration_background": 0.0,
+    "activity_concentration_background": 0.05,
     "include_lung_insert": False,
     "sphere_dict": {
         "ring_R": 57,
@@ -346,13 +433,38 @@ def cli():
                    metavar=("sz","sy","sx"), help="Voxel size in mm")
     p.add_argument("--out-act", default="activity.npy", help="Output path for activity volume")
     p.add_argument("--out-ct",  default="ctmu.npy",     help="Output path for CT mu-map")
+    p.add_argument("--offset", type=float, nargs=3, default=[0.0, 0.0, 0.0],
+                   metavar=("cz","cy","cx"), help="Global offset (mm) applied to every primitive")
+    p.add_argument(
+        "--supersample",
+        type=int,
+        nargs="+",
+        default=[1],
+        metavar="factor",
+        help="Supersampling factor: provide one value for isotropic or three values for (z y x).",
+    )
     args = p.parse_args()
 
     matrix_size = (args.z, args.y, args.x)
     voxel_mm = tuple(args.voxel)
     preset = pet_nema_dict if args.preset == "pet" else earl_nema_dict
 
-    act, ct = create_nema(matrix_size=matrix_size, voxel_size_mm=voxel_mm, nema_dict=preset)
+    if len(args.supersample) == 1:
+        supersample = args.supersample[0]
+    elif len(args.supersample) == 3:
+        supersample = tuple(args.supersample)
+    else:
+        p.error("--supersample expects one value or three values (z y x).")
+
+    offset_mm = tuple(args.offset)
+    act, ct = create_nema(
+        matrix_size=matrix_size,
+        voxel_size_mm=voxel_mm,
+        nema_dict=preset,
+        center_offset_mm=offset_mm,
+        supersample=supersample,
+    )
     np.save(args.out_act, act)
     np.save(args.out_ct, ct)
     print(f"Saved:\n  {args.out_act}  (shape {act.shape}, dtype {act.dtype})\n  {args.out_ct}   (shape {ct.shape}, dtype {ct.dtype})")
+
