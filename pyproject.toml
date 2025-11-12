@@ -9,7 +9,7 @@ description = "Virtual nuclear medicine phantom generators (IEC/NEMA IQ, etc.)"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { file = "LICENSE" }
-authors = [{ name = "Your Name" }]
+authors = [{ name = "Stathis Varzakis", email = "varzakis@gmail.com" }]
 dependencies = ["numpy>=1.23"]
 
 [project.scripts]
