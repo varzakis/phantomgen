@@ -214,14 +214,14 @@ from phantomgen import create_nema, pet_nema_dict
 
 act, ct, masks = create_nema(nema_dict=pet_nema_dict)
 
-z = act.shape[0] // 2
+z = 110
 
 fig, ax = plt.subplots(1,2, figsize=(10,5))
 
 ax[0].imshow(act[z], cmap="inferno")
 ax[0].set_title("Activity (MBq/voxel)")
 
-ax[1].imshow(ct[z], cmap="gray")
+ax[1].imshow(ct[z], cmap="gray", vmin=0.9)
 ax[1].set_title("CT μ-map (cm⁻¹)")
 
 plt.show()
