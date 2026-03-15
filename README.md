@@ -2,9 +2,9 @@
 # phantomgen
 Virtual NEMA / IEC Nuclear Medicine Phantom Generator
 
-[![PyPI version](https://img.shields.io/pypi/v/phantomgen.svg)](https://pypi.org/project/phantomgen/)
-[![Python](https://img.shields.io/pypi/pyversions/phantomgen.svg)](https://pypi.org/project/phantomgen/)
 [![License](https://img.shields.io/github/license/varzakis/phantomgen)](LICENSE)
+[![Last commit](https://img.shields.io/github/last-commit/varzakis/phantomgen)](https://github.com/varzakis/phantomgen/commits)
+[![Python](https://img.shields.io/badge/python-3.9%2B-blue)](#installation)
 
 `phantomgen` is a lightweight Python package that generates realistic **3D numerical NEMA / IEC body phantoms** for nuclear medicine simulations, algorithm validation, and dosimetry research.
 
@@ -31,7 +31,7 @@ The figure below shows a central slice of a generated phantom.
 
 | Activity | CT attenuation |
 |---------|----------------|
-| ![](docs/activity_example.png) | ![](docs/ct_example.png) |
+| ![](docs/pet_nema_act.png) | ![](docs/pet_nema_ctac.png) |
 
 Images can be generated using the visualization example below.
 
