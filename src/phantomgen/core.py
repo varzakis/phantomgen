@@ -1,6 +1,5 @@
 import numpy as np
 
-
 def _normalize_supersample(factors):
     """
     Ensure supersampling factors are a length-3 tuple of positive integers.
@@ -43,9 +42,9 @@ def _downsample_volume(volume, factors, reduce="mean"):
         raise ValueError("reduce must be either 'mean' or 'sum'.")
     return reduced.astype(volume.dtype, copy=False)
 
-# ===============================================================
-# ===  HELPER: Generate centered world coordinates for a volume ===
-# ===============================================================
+# ==================================================================
+# ===  HELPER: Generate centered world coordinates for a volume  ===
+# ==================================================================
 def _world_coords(shape, voxel_mm, center_mm):
     """
     Compute 3D world coordinates (mm) for voxel centers, relative to the
@@ -77,7 +76,7 @@ def _world_coords(shape, voxel_mm, center_mm):
 
 
 # ===============================================================
-# ===  BASIC GEOMETRIC PRIMITIVES (CYLINDER, BOX, SPHERE)       ===
+# ===  BASIC GEOMETRIC PRIMITIVES (CYLINDER, BOX, SPHERE)     ===
 # ===============================================================
 def add_cylinder(volume, voxel_size_mm, radius_mm, height_mm, deg_range, center_mm, value=1):
     """
@@ -106,7 +105,8 @@ def add_cylinder(volume, voxel_size_mm, radius_mm, height_mm, deg_range, center_
     value : scalar
         Value assigned inside the region.
     """
-    assert volume.ndim == 3
+    if volume.ndim != 3:
+        raise ValueError("Expected a 3D volume.")
     Zmm, Ymm, Xmm = _world_coords(volume.shape, voxel_size_mm, center_mm)
     mask = (np.abs(Zmm) <= height_mm / 2.0) & ((Xmm**2 + Ymm**2) <= radius_mm**2)
 
@@ -141,7 +141,8 @@ def add_box(volume, voxel_size_mm, size_mm, center_mm=(0, 0, 0), rotation_deg=0.
     value : scalar
         Value assigned inside the box.
     """
-    assert volume.ndim == 3
+    if volume.ndim != 3:
+        raise ValueError("Expected a 3D volume.")
     Zmm, Ymm, Xmm = _world_coords(volume.shape, voxel_size_mm, center_mm)
     if rotation_deg % 360:
         th = np.deg2rad(rotation_deg)
@@ -172,7 +173,8 @@ def add_sphere(volume, voxel_size_mm, radius_mm, center_mm=(0, 0, 0), value=1):
     value : scalar
         Value assigned inside the sphere.
     """
-    assert volume.ndim == 3
+    if volume.ndim != 3:
+        raise ValueError("Expected a 3D volume.")
     Zmm, Ymm, Xmm = _world_coords(volume.shape, voxel_size_mm, center_mm)
     inside = (Xmm**2 + Ymm**2 + Zmm**2) <= radius_mm**2
     volume[inside] = value
@@ -180,7 +182,7 @@ def add_sphere(volume, voxel_size_mm, radius_mm, center_mm=(0, 0, 0), value=1):
 
 
 # ===============================================================
-# ===  NEMA NU 2 / IEC BODY PHANTOM CREATOR                    ===
+# ===  NEMA NU 2 / IEC BODY PHANTOM CREATOR                   ===
 # ===============================================================
 def create_nema(
     matrix_size=(256, 256, 256),              # (Z,Y,X)
@@ -192,9 +194,10 @@ def create_nema(
     """
     Create a 3D numerical phantom matching the IEC/NEMA IQ body phantom geometry.
 
-    Generates both:
-      • `act_vol` – activity map (MBq/voxel)
-      • `ct_vol`  – attenuation map (cm⁻¹)
+    Generates:
+      • `act_vol`               – activity map (MBq/voxel)
+      • `ctac_vol`              – attenuation map (cm⁻¹)
+      • `mask_vols_binary_dict` – dictionary of binary mask volumes
 
     Parameters
     ----------
@@ -203,29 +206,7 @@ def create_nema(
     voxel_size_mm : tuple (sz, sy, sx)
         Physical voxel size in mm.
     nema_dict : dict
-        Dictionary defining all phantom parameters:
-        {
-            "activity_concentration_background": 0.05,   # MBq/ml
-            "fill_mu_value": 0.096,                      # cm^-1
-            "perspex_mu_value": 0.12,                    # optional
-            "lung_insert": {
-                "include": True,
-                "lung_mu_value": 0.029
-            },
-            "sphere_dict": {
-                "ring_R": 57,                             # radius (mm)
-                "ring_z": -37,                            # z-position (mm)
-                "spheres": {
-                    "diametre_mm": [10,13,17,22,28,37],
-                    "angle_loc":   [30,90,150,210,270,330],
-                    "act_conc_MBq_ml": [0.00,0.00,0.04,0.04,0.04,0.04]
-                }
-            }
-        }
-
-        The dictionary may also include:
-            "center_offset_mm": (cz, cy, cx)   # global shift in mm
-
+        Dictionary defining all phantom parameters.
     center_offset_mm : tuple (cz, cy, cx) or None
         Optional explicit global offset applied to every primitive (mm).
         Overrides any value present in `nema_dict` when provided.
@@ -233,12 +214,17 @@ def create_nema(
         Supersampling factor along (Z, Y, X). The phantom is generated on a higher
         resolution grid and downsampled back to `matrix_size`. Activity values are
         summed during downsampling to conserve total activity; attenuation values
-        are averaged.
+        are averaged. Binary masks are downsampled conservatively, i.e. a coarse
+        voxel is set to 1 if any supersampled subvoxel belongs to the region.
 
     Returns
     -------
-    act_vol, ct_vol : np.ndarray
-        Activity and CT μ-map volumes (same shape).
+    act_vol : np.ndarray
+        Activity volume.
+    ctac_vol : np.ndarray
+        CT attenuation volume.
+    mask_vols_binary_dict : dict[str, np.ndarray]
+        Dictionary of binary mask volumes.
     """
 
     supersample = _normalize_supersample(supersample)
@@ -256,7 +242,7 @@ def create_nema(
 
     # --- defaults ---
     defaults = {
-        "mu_values":{
+        "mu_values": {
             "perspex_mu_value": 0.1,
             "fill_mu_value": 0.096,
             "lung_mu_value": 0.029
@@ -268,9 +254,9 @@ def create_nema(
             "ring_R": 57,
             "ring_z": -37,
             "spheres": {
-                "diametre_mm": [10,13,17,22,28,37],
-                "angle_loc":   [30,90,150,210,270,330],
-                "act_conc_MBq_ml": [0.00,0.00,0.4,0.4,0.4,0.4],
+                "diametre_mm": [10, 13, 17, 22, 28, 37],
+                "angle_loc":   [30, 90, 150, 210, 270, 330],
+                "act_conc_MBq_ml": [0.00, 0.00, 0.4, 0.4, 0.4, 0.4],
             }
         }
     }
@@ -279,8 +265,8 @@ def create_nema(
     if nema_dict is None:
         nema_dict = defaults
     else:
-        # recursively update nested dicts
         import copy
+
         def deep_update(d, u):
             for k, v in u.items():
                 if isinstance(v, dict):
@@ -288,6 +274,7 @@ def create_nema(
                 else:
                     d.setdefault(k, v)
             return d
+
         nema_dict = deep_update(copy.deepcopy(nema_dict), defaults)
 
     # --- global offset ---
@@ -313,65 +300,176 @@ def create_nema(
     ring_R = sphere_info["ring_R"]
     z_pos = sphere_info["ring_z"]
 
+    # --- sphere data validation ---
+    sphere_params = sphere_info["spheres"]
+    n_d = len(sphere_params["diametre_mm"])
+    n_a = len(sphere_params["angle_loc"])
+    n_c = len(sphere_params["act_conc_MBq_ml"])
+    if not (n_d == n_a == n_c):
+        raise ValueError(
+            "sphere_dict['spheres'] entries 'diametre_mm', 'angle_loc', and "
+            "'act_conc_MBq_ml' must have the same length."
+        )
+
     # --- volume size check ---
     vol_dim = [m * v for m, v in zip(matrix_size, voxel_size_mm)]
     if any(v < lim for v, lim in zip(vol_dim, (220, 300, 230))):
-        print("❌ Volume smaller than NEMA phantom dimensions!")
-        return
+        raise ValueError(
+            f"Volume dimensions in mm {tuple(vol_dim)} are smaller than required "
+            f"NEMA phantom dimensions {(220, 300, 230)}."
+        )
 
     ctac_vol = np.zeros(working_matrix, np.float32)
     act_vol = np.zeros(working_matrix, np.float32)
+
+    # high-resolution masks used to derive binary masks
+    background_mask_hr = np.zeros(working_matrix, np.uint8)
+    lung_mask_hr = np.zeros(working_matrix, np.uint8)
+    sphere_masks_hr = {}
 
     ml_per_vox = np.prod(working_voxel) / 1000.0
     back_MBq_per_vox = act_conc_backgr * ml_per_vox
 
     # --- connecting box ---
-    add_box(ctac_vol,  working_voxel, (220, 75, 150), with_offset((0, 72.5, 0)), value=perspex_mu_value)
-    add_box(ctac_vol,  working_voxel, (214, 72, 150), with_offset((0, 71, 0)), value=fill_mu_value)
-    add_box(act_vol, working_voxel, (214, 72, 150), with_offset((0, 71, 0)), value=back_MBq_per_vox)
+    add_box(
+        ctac_vol,
+        working_voxel,
+        (220, 75, 150),
+        with_offset((0, 72.5, 0)),
+        value=perspex_mu_value,
+    )
+    add_box(
+        ctac_vol,
+        working_voxel,
+        (214, 72, 150),
+        with_offset((0, 71, 0)),
+        value=fill_mu_value,
+    )
+    add_box(
+        act_vol,
+        working_voxel,
+        (214, 72, 150),
+        with_offset((0, 71, 0)),
+        value=back_MBq_per_vox,
+    )
+    add_box(
+        background_mask_hr,
+        working_voxel,
+        (214, 72, 150),
+        with_offset((0, 71, 0)),
+        value=1,
+    )
 
     # --- tank structure ---
     tanks = [
-        dict(r=150, h=220, deg=(180, 360), c=(0, 35, 0), mu="perspex"),
-        dict(r=147, h=214, deg=(180, 360), c=(0, 35, 0), mu="fill"),
+        dict(r=150, h=220, deg=(180, 360), c=(0, 35, 0),   mu="perspex"),
+        dict(r=147, h=214, deg=(180, 360), c=(0, 35, 0),   mu="fill"),
         dict(r=75,  h=220, deg=(90, 180),  c=(0, 35, -75), mu="perspex"),
         dict(r=72,  h=214, deg=(90, 180),  c=(0, 35, -75), mu="fill"),
-        dict(r=75,  h=220, deg=(0, 90),    c=(0, 35, 75), mu="perspex"),
-        dict(r=72,  h=214, deg=(0, 90),    c=(0, 35, 75), mu="fill"),
+        dict(r=75,  h=220, deg=(0, 90),    c=(0, 35, 75),  mu="perspex"),
+        dict(r=72,  h=214, deg=(0, 90),    c=(0, 35, 75),  mu="fill"),
     ]
     if lung_insert:
         tanks.append(dict(r=25, h=214, deg=None, c=(0, 0, 0), mu="lung"))
 
     for t in tanks:
         if t["mu"] == "perspex":
-            add_cylinder(ctac_vol, working_voxel, t["r"], t["h"], t["deg"], with_offset(t["c"]), perspex_mu_value)
+            add_cylinder(
+                ctac_vol, working_voxel, t["r"], t["h"], t["deg"],
+                with_offset(t["c"]), perspex_mu_value
+            )
         elif t["mu"] == "fill":
-            add_cylinder(ctac_vol, working_voxel, t["r"], t["h"], t["deg"], with_offset(t["c"]), fill_mu_value)
-            add_cylinder(act_vol, working_voxel, t["r"], t["h"], t["deg"], with_offset(t["c"]), back_MBq_per_vox)
+            add_cylinder(
+                ctac_vol, working_voxel, t["r"], t["h"], t["deg"],
+                with_offset(t["c"]), fill_mu_value
+            )
+            add_cylinder(
+                act_vol, working_voxel, t["r"], t["h"], t["deg"],
+                with_offset(t["c"]), back_MBq_per_vox
+            )
+            add_cylinder(
+                background_mask_hr, working_voxel, t["r"], t["h"], t["deg"],
+                with_offset(t["c"]), 1
+            )
         else:
-            add_cylinder(ctac_vol, working_voxel, t["r"], t["h"], t["deg"], with_offset(t["c"]), lung_mu_value)
-            add_cylinder(act_vol, working_voxel, t["r"], t["h"], t["deg"], with_offset(t["c"]), 0)
+            add_cylinder(
+                ctac_vol, working_voxel, t["r"], t["h"], t["deg"],
+                with_offset(t["c"]), lung_mu_value
+            )
+            add_cylinder(
+                act_vol, working_voxel, t["r"], t["h"], t["deg"],
+                with_offset(t["c"]), 0
+            )
+            add_cylinder(
+                lung_mask_hr, working_voxel, t["r"], t["h"], t["deg"],
+                with_offset(t["c"]), 1
+            )
 
     # --- add spheres ---
-    for d, a, c in zip(
-        sphere_info["spheres"]["diametre_mm"],
-        sphere_info["spheres"]["angle_loc"],
-        sphere_info["spheres"]["act_conc_MBq_ml"]
+    for i, (d, a, c) in enumerate(
+        zip(
+            sphere_info["spheres"]["diametre_mm"],
+            sphere_info["spheres"]["angle_loc"],
+            sphere_info["spheres"]["act_conc_MBq_ml"],
+        ),
+        start=1,
     ):
         r_shell = (d + 2) / 2.0
         r_interior = d / 2.0
         ang = np.deg2rad(a)
         cy, cx = -ring_R * np.sin(ang), ring_R * np.cos(ang)
+        center = with_offset((z_pos, cy, cx))
         fill_act = c * ml_per_vox
-        add_sphere(ctac_vol, working_voxel, r_shell, with_offset((z_pos, cy, cx)), value=perspex_mu_value)
-        add_sphere(ctac_vol, working_voxel, r_interior, with_offset((z_pos, cy, cx)), value=fill_mu_value)
-        add_sphere(act_vol, working_voxel, r_interior, with_offset((z_pos, cy, cx)), value=fill_act)
 
+        add_sphere(ctac_vol, working_voxel, r_shell, center, value=perspex_mu_value)
+        add_sphere(ctac_vol, working_voxel, r_interior, center, value=fill_mu_value)
+        add_sphere(act_vol, working_voxel, r_interior, center, value=fill_act)
+
+        sphere_exclusion_mask = np.zeros(working_matrix, np.uint8)
+        add_sphere(sphere_exclusion_mask, working_voxel, r_shell, center, value=1)
+        
+        sphere_mask = np.zeros(working_matrix, np.uint8)
+        add_sphere(sphere_mask, working_voxel, r_interior, center, value=1)
+        
+        sphere_masks_hr[f"sphere_{i}"] = sphere_mask
+
+        # full sphere assembly (shell + interior) is not background
+        background_mask_hr[sphere_exclusion_mask > 0] = 0
+
+    # lung insert is not background
+    background_mask_hr[lung_mask_hr > 0] = 0
+
+    # --- downsample if supersampled ---
     if use_supersample:
         act_vol = _downsample_volume(act_vol, supersample, reduce="sum")
         ctac_vol = _downsample_volume(ctac_vol, supersample, reduce="mean")
 
-    return act_vol, ctac_vol
+        background_mask = (
+            _downsample_volume(background_mask_hr.astype(np.float32), supersample, reduce="mean") > 0.0
+        ).astype(np.uint8)
+
+        lung_mask = (
+            _downsample_volume(lung_mask_hr.astype(np.float32), supersample, reduce="mean") > 0.0
+        ).astype(np.uint8)
+
+        sphere_masks = {
+            k: (
+                _downsample_volume(v.astype(np.float32), supersample, reduce="mean") > 0.0
+            ).astype(np.uint8)
+            for k, v in sphere_masks_hr.items()
+        }
+    else:
+        background_mask = background_mask_hr
+        lung_mask = lung_mask_hr
+        sphere_masks = sphere_masks_hr
+
+    mask_vols_binary_dict = {
+        "background": background_mask,
+        "lung_insert": lung_mask,
+        **sphere_masks,
+    }
+
+    return act_vol, ctac_vol, mask_vols_binary_dict
 
 
 earl_nema_dict = {
@@ -413,28 +511,48 @@ pet_nema_dict = {
     }
 }
 
-# ... your code exactly as provided above ...
+
 
 def cli():
     """
-    CLI to write activity and CT volumes to .npy files.
+    CLI to write activity, CTAC, and optionally mask volumes to .npy files.
+
     Examples:
-      phantomgen --preset pet --out-act act.npy --out-ct ct.npy
+      phantomgen --preset pet --out-act act.npy --out-ctac ctac.npy
       phantomgen --preset earl --z 256 --y 256 --x 256 --voxel 2 2 2
+      phantomgen --preset pet --out-mask-dir masks/
     """
-    import argparse, numpy as np
+    import argparse
+    import os
 
     p = argparse.ArgumentParser(prog="phantomgen", description="Generate IEC/NEMA phantoms")
     p.add_argument("--preset", choices=["pet", "earl"], default="pet", help="Parameter set")
     p.add_argument("--z", type=int, default=256)
     p.add_argument("--y", type=int, default=256)
     p.add_argument("--x", type=int, default=256)
-    p.add_argument("--voxel", type=float, nargs=3, default=[2.0, 2.0, 2.0],
-                   metavar=("sz","sy","sx"), help="Voxel size in mm")
+    p.add_argument(
+        "--voxel",
+        type=float,
+        nargs=3,
+        default=[2.0, 2.0, 2.0],
+        metavar=("sz", "sy", "sx"),
+        help="Voxel size in mm",
+    )
     p.add_argument("--out-act", default="activity.npy", help="Output path for activity volume")
-    p.add_argument("--out-ct",  default="ctmu.npy",     help="Output path for CT mu-map")
-    p.add_argument("--offset", type=float, nargs=3, default=[0.0, 0.0, 0.0],
-                   metavar=("cz","cy","cx"), help="Global offset (mm) applied to every primitive")
+    p.add_argument("--out-ctac", default="ctmu.npy", help="Output path for CT attenuation map")
+    p.add_argument(
+        "--out-mask-dir",
+        default=None,
+        help="Optional output directory for binary masks. If provided, all masks are saved as separate .npy files.",
+    )
+    p.add_argument(
+        "--offset",
+        type=float,
+        nargs=3,
+        default=[0.0, 0.0, 0.0],
+        metavar=("cz", "cy", "cx"),
+        help="Global offset (mm) applied to every primitive",
+    )
     p.add_argument(
         "--supersample",
         type=int,
@@ -457,14 +575,32 @@ def cli():
         p.error("--supersample expects one value or three values (z y x).")
 
     offset_mm = tuple(args.offset)
-    act, ct = create_nema(
+    act, ctac, mask_bin_dict = create_nema(
         matrix_size=matrix_size,
         voxel_size_mm=voxel_mm,
         nema_dict=preset,
         center_offset_mm=offset_mm,
         supersample=supersample,
     )
-    np.save(args.out_act, act)
-    np.save(args.out_ct, ct)
-    print(f"Saved:\n  {args.out_act}  (shape {act.shape}, dtype {act.dtype})\n  {args.out_ct}   (shape {ct.shape}, dtype {ct.dtype})")
 
+    np.save(args.out_act, act)
+    np.save(args.out_ctac, ctac)
+
+    saved_mask_paths = []
+    if args.out_mask_dir is not None:
+        os.makedirs(args.out_mask_dir, exist_ok=True)
+        for mask_name, mask_vol in mask_bin_dict.items():
+            mask_path = os.path.join(args.out_mask_dir, f"{mask_name}.npy")
+            np.save(mask_path, mask_vol)
+            saved_mask_paths.append(mask_path)
+
+    print(
+        f"Saved:\n"
+        f"  {args.out_act}   (shape {act.shape}, dtype {act.dtype})\n"
+        f"  {args.out_ctac}  (shape {ctac.shape}, dtype {ctac.dtype})"
+    )
+
+    if saved_mask_paths:
+        print("  Masks:")
+        for mask_path in saved_mask_paths:
+            print(f"    {mask_path}")

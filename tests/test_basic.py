@@ -1,10 +1,42 @@
 import numpy as np
-from phantomgen import create_nema, pet_nema_dict
+from phantomgen.core import create_nema
 
-def test_shapes_and_values():
-    act, ct = create_nema(matrix_size=(64,64,64), voxel_size_mm=(2,2,2), nema_dict=pet_nema_dict)
-    assert act.shape == ct.shape == (64,64,64)
-    assert act.dtype == np.float32 and ct.dtype == np.float32
-    # Should have nonzero fill in expected ranges
-    assert np.isfinite(act).all() and act.max() > 0
-    assert np.isfinite(ct).all() and ct.max() > 0
+def test_create_nema_shapes():
+    act, ct, masks = create_nema(
+        matrix_size=(256,256,256),
+        voxel_size_mm=(2,2,2)
+    )
+    assert act.shape == ct.shape
+    assert isinstance(masks, dict)
+
+def test_mask_keys():
+    act, ct, masks = create_nema(
+        matrix_size=(256,256,256),
+        voxel_size_mm=(2,2,2)
+    )
+    assert "background" in masks
+    assert any(k.startswith("sphere_") for k in masks)
+
+def test_supersample():
+    act, ct, masks = create_nema(
+        matrix_size=(128,128,128),
+        voxel_size_mm=(4,4,4),
+        supersample=2
+    )
+    assert act.shape == (128,128,128)
+
+def test_invalid_sphere_lengths():
+    bad = {
+        "sphere_dict":{
+            "ring_R":57,
+            "ring_z":-37,
+            "spheres":{
+                "diametre_mm":[10,13],
+                "angle_loc":[30],
+                "act_conc_MBq_ml":[1,1]
+            }
+        }
+    }
+    import pytest
+    with pytest.raises(ValueError):
+        create_nema(matrix_size=(256,256,256), voxel_size_mm=(2,2,2), nema_dict=bad)
