@@ -39,12 +39,6 @@ Images can be generated using the visualization example below.
 
 # Installation
 
-## From PyPI (recommended)
-
-```bash
-pip install phantomgen
-```
-
 ## From source
 
 ```bash
